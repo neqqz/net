@@ -16,6 +16,7 @@ import (
 	"reflect"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"testing/synctest"
@@ -202,7 +203,7 @@ func TestServerHeaderInvalid(t *testing.T) {
 			reqStream.writeHeadersRaw(requestHeader(tt.header))
 
 			if tt.wantError {
-				reqStream.wantError(quic.StreamErrorCode(errH3MessageError))
+				reqStream.wantError(quic.StreamError(errH3MessageError))
 			} else {
 				reqStream.wantHeaders(nil)
 				reqStream.wantData(body)
@@ -255,7 +256,7 @@ func TestServerPseudoHeader(t *testing.T) {
 
 		reqStream = tc.newStream(streamTypeRequest)
 		reqStream.writeHeaders(http.Header{}) // Missing pseudo-header.
-		reqStream.wantError(quic.StreamErrorCode(errH3MessageError))
+		reqStream.wantError(quic.StreamError(errH3MessageError))
 	})
 }
 
@@ -338,7 +339,7 @@ func TestServerPseudoHeaderCount(t *testing.T) {
 			reqStream.writeHeaders(tt.header)
 
 			if tt.wantError {
-				reqStream.wantError(quic.StreamErrorCode(errH3MessageError))
+				reqStream.wantError(quic.StreamError(errH3MessageError))
 			} else {
 				reqStream.wantHeaders(nil)
 				reqStream.wantData(body)
@@ -495,7 +496,7 @@ func TestServerAuthorityAndHostHeader(t *testing.T) {
 					t.Errorf(`handler got Header["Host"] = %q, want unset`, h)
 				}
 			} else {
-				reqStream.wantError(quic.StreamErrorCode(errH3MessageError))
+				reqStream.wantError(quic.StreamError(errH3MessageError))
 			}
 		})
 	}
@@ -540,6 +541,72 @@ func TestServerInvalidStatus(t *testing.T) {
 		})
 		reqStream.wantClosed("request is complete")
 	})
+}
+
+func TestServerHeaderLimits(t *testing.T) {
+	for _, test := range []struct {
+		name                string
+		h                   http.Header
+		valid               bool
+		maxHeaderBytes      int
+		maxHeaderValueCount int
+	}{{
+		name: "within limits",
+		h: http.Header{
+			"x-foo": {strings.Repeat("x", 1000)},
+		},
+		maxHeaderBytes: 1500,
+		valid:          true,
+	}, {
+		name: "too many header bytes",
+		h: http.Header{
+			"x-foo": {strings.Repeat("x", 1000)},
+			"x-bar": {strings.Repeat("x", 1000)},
+		},
+		maxHeaderBytes: 1500,
+	}, {
+		name: "field count within limit",
+		h: http.Header{
+			// :method, :scheme, :path, plus:
+			"x-foo": {"4"},
+			"x-bar": {"5"},
+		},
+		maxHeaderBytes:      1500,
+		maxHeaderValueCount: 5,
+		valid:               true,
+	}, {
+		name: "field count over limit",
+		h: http.Header{
+			// :method, :scheme, :path, plus:
+			"x-foo": {"4"},
+			"x-bar": {"5"},
+		},
+		maxHeaderBytes:      1500,
+		maxHeaderValueCount: 4,
+	}} {
+		synctestSubtest(t, test.name, func(t *testing.T) {
+			if test.maxHeaderValueCount != 0 {
+				t.Skip("TODO: when we support only go1.27")
+			}
+			ts := newTestServer(t, nil)
+			ts.s.srv1.MaxHeaderBytes = test.maxHeaderBytes
+			// TODO: When we only support go1.27.
+			//ts.s.srv1.MaxHeaderValueCount = test.maxHeaderValueCount
+			tc := ts.connect()
+			tc.greet()
+
+			reqStream := tc.newStream(streamTypeRequest)
+			reqStream.writeHeaders(requestHeader(test.h))
+			if test.valid {
+				call := tc.nextHandlerCall()
+				if call == nil {
+					t.Fatal("no server handler call; want one")
+				}
+			} else {
+				reqStream.wantError(quic.StreamErrorCode(errH3RequestRejected))
+			}
+		})
+	}
 }
 
 func TestServerBody(t *testing.T) {
@@ -1456,7 +1523,7 @@ func TestServerInvalidPathHeader(t *testing.T) {
 			reqStream.writeHeaders(requestHeader(http.Header{
 				":path": []string{test.path},
 			}))
-			reqStream.wantError(quic.StreamErrorCode(errH3MessageError))
+			reqStream.wantError(quic.StreamError(errH3MessageError))
 		})
 	}
 }
@@ -1521,7 +1588,7 @@ func TestServerPastWriteDeadline(t *testing.T) {
 		reqStream.wantData([]byte("one"))
 		time.Sleep(2 * time.Second) // T+2.
 		synctest.Wait()
-		reqStream.wantError(quic.StreamErrorCode(errH3RequestCancelled))
+		reqStream.wantError(quic.StreamError(errH3RequestCancelled))
 	})
 }
 
@@ -1588,7 +1655,7 @@ func TestServerFutureWriteDeadline(t *testing.T) {
 		time.Sleep(3 * time.Second) // T+3. After "three" is written.
 		reqStream.wantData([]byte("three"))
 		time.Sleep(3 * time.Second) // T+6. After server exceeds deadline.
-		reqStream.wantError(quic.StreamErrorCode(errH3RequestCancelled))
+		reqStream.wantError(quic.StreamError(errH3RequestCancelled))
 	})
 }
 
@@ -1712,7 +1779,7 @@ func TestServerReadHeaderTimeout(t *testing.T) {
 		time.Sleep(timeout - 1)
 		reqStream.wantIdle("timeout has not been reached")
 		time.Sleep(1)
-		reqStream.wantError(quic.StreamErrorCode(errH3RequestRejected))
+		reqStream.wantError(quic.StreamError(errH3RequestRejected))
 		if tc.nextHandlerCall() != nil {
 			t.Error("server handler should not be called")
 		}
@@ -1815,7 +1882,7 @@ func TestServerWriteTimeout(t *testing.T) {
 			t.Errorf("Write() after timeout = %v, want os.ErrDeadlineExceeded", err)
 		}
 		call.exit()
-		reqStream.wantError(quic.StreamErrorCode(errH3RequestCancelled))
+		reqStream.wantError(quic.StreamError(errH3RequestCancelled))
 	})
 }
 

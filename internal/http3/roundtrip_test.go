@@ -337,7 +337,7 @@ func TestRoundTripRequestBodyErrors(t *testing.T) {
 			for {
 				_, err := st.readFrameHeader()
 				if err != nil {
-					var code quic.StreamErrorCode
+					var code quic.StreamError
 					if !errors.As(err, &code) {
 						t.Fatalf("request stream closed with error %v: want QUIC stream error", err)
 					}
@@ -377,7 +377,7 @@ func TestRoundTripRequestBodyErrorAfterHeaders(t *testing.T) {
 		bodyw.Write(make([]byte, req.ContentLength+1))
 
 		//io.Copy(io.Discard, st)
-		st.wantError(quic.StreamErrorCode(errH3InternalError))
+		st.wantError(quic.StreamError(errH3InternalError))
 
 		if err := rt.response().Body.Close(); err == nil {
 			t.Fatalf("Response.Body.Close() = %v, want error", err)
@@ -413,7 +413,7 @@ func TestRoundTripRequestBodyIgnored(t *testing.T) {
 
 			// Server stops reading the request because it has enough
 			// information already to construct its response.
-			st.CloseRead()
+			st.CloseRead(uint64(errH3NoError))
 			st.writeHeaders(http.Header{
 				":status": {"200"},
 			})
