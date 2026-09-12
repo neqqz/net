@@ -1011,17 +1011,18 @@ var writeDataPool = sync.Pool{
 func (sc *serverConn) writeDataFromHandler(stream *stream, data []byte, endStream bool) error {
 	ch := sc.srv.state.getErrChan()
 	writeArg := writeDataPool.Get().(*writeData)
-	var pad []byte
-	if sc.srv.DataPaddingMax > 0 {
-		// initialMaxFrameSize (16384) is the RFC 7540 floor for
-		// SETTINGS_MAX_FRAME_SIZE — a compliant peer can never negotiate
-		// below it — so using it here instead of sc.maxFrameSize avoids a
-		// cross-goroutine data race (sc.maxFrameSize is only safe to read
-		// from the serve loop goroutine; this runs on the handler's).
-		padLen := pickDataPaddingLen(sc.srv.DataPaddingMin, sc.srv.DataPaddingMax, len(data), initialMaxFrameSize)
-		pad = dataPadding(padLen)
-	}
-	*writeArg = writeData{stream.id, data, endStream, pad}
+	// Padding (when sc.srv.DataPaddingMax>0) is deliberately NOT chosen
+	// here: this runs on the handler's goroutine, where a single Write()
+	// may still need to be split into several DATA frames once the write
+	// scheduler applies flow control and MAX_FRAME_SIZE in Consume() (see
+	// writesched.go). Picking one padLen here — against len(data) before
+	// any split — would either only pad the first fragment or (if we
+	// tried to size it against the eventual per-frame length) require
+	// knowing that length before it's decided. Consume() picks padLen
+	// fresh for each actual wire frame instead, and charges it against
+	// flow control there, which both fragments correctly and keeps our
+	// own flow-control bookkeeping honest (see comment in Consume()).
+	*writeArg = writeData{stream.id, data, endStream, nil}
 	err := sc.writeFrameFromHandler(FrameWriteRequest{
 		write:  writeArg,
 		stream: stream,

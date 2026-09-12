@@ -89,17 +89,78 @@ func (wr FrameWriteRequest) Consume(n int32) (FrameWriteRequest, FrameWriteReque
 	if allowed <= 0 {
 		return empty, empty, 0
 	}
-	if len(wd.p) > int(allowed) {
-		wr.stream.flow.take(allowed)
+
+	// wd.pad (if any) was already chosen by writeDataFromHandler, against
+	// the *original*, unsplit len(wd.p) — before we knew how much of it
+	// would actually fit in this wire frame. Recompute it here instead of
+	// trusting that value, for two reasons:
+	//  1. Correctness: the pad-length byte + padding count against the
+	//     flow-control window exactly like the data does (RFC 7540
+	//     §6.9.1). wr.stream.flow.take() below must charge for the whole
+	//     wire frame, not just len(data), or our accounting silently
+	//     drifts ahead of what the peer (correctly) decrements on
+	//     receipt — see serverConn.processData's sc.inflow.take(f.Length)
+	//     — until eventually the peer sees more bytes than it ever
+	//     granted and kills the connection with a FLOW_CONTROL_ERROR
+	//     GOAWAY. This reproduces in proportion to bytes/frames sent, not
+	//     wall-clock time, so it shows up as "H2 randomly dies after a
+	//     while" under sustained traffic rather than at connect time.
+	//  2. Coverage: a writeData that has to be split across several DATA
+	//     frames (len(wd.p) > allowed, the branch below) would otherwise
+	//     carry wd.pad on only one fragment and silently send the rest
+	//     unpadded — recomputing per fragment keeps every wire frame of a
+	//     large write padded, not just the first.
+	dataPaddingMax := wr.stream.sc.srv.DataPaddingMax
+	// Reserve room for the worst case (pad-length byte + max padding) up
+	// front, the same way the client side does in writeRequestBody, so
+	// shrinking dataLen to fit "allowed" actually leaves space for
+	// padding instead of consuming the whole budget as data and leaving
+	// pickDataPaddingLen nothing to work with.
+	overhead := 0
+	if dataPaddingMax > 0 {
+		overhead = 1 + dataPaddingMax
+	}
+	dataLen := len(wd.p)
+	if dataLen+overhead > int(allowed) {
+		dataLen = int(allowed) - overhead
+		if dataLen < 0 {
+			dataLen = 0
+		}
+	}
+	var pad []byte
+	if dataPaddingMax > 0 {
+		room := int(allowed) - dataLen - 1
+		if room < 0 {
+			room = 0
+		}
+		padLen := pickDataPaddingLen(wr.stream.sc.srv.DataPaddingMin, dataPaddingMax, dataLen, dataLen+1+room)
+		if padLen > room {
+			padLen = room
+		}
+		pad = dataPadding(padLen)
+	}
+	// Charge exactly what goes on the wire (data + pad-length byte + pad),
+	// which may be less than the "allowed"/overhead reservation above —
+	// any unused reservation just isn't spent, it is never a place we can
+	// end up charging *more* than the peer actually receives.
+	chargedBytes := dataLen + len(pad)
+	if len(pad) > 0 {
+		chargedBytes++ // pad-length field
+	}
+	// NB: cast cannot overflow because chargedBytes <= allowed <= math.MaxInt32.
+	wr.stream.flow.take(int32(chargedBytes))
+
+	if dataLen < len(wd.p) {
 		consumed := FrameWriteRequest{
 			stream: wr.stream,
 			write: &writeData{
 				streamID: wd.streamID,
-				p:        wd.p[:allowed],
+				p:        wd.p[:dataLen],
 				// Even if the original had endStream set, there
-				// are bytes remaining because len(wd.p) > allowed,
+				// are bytes remaining because dataLen < len(wd.p),
 				// so we know endStream is false.
 				endStream: false,
+				pad:       pad,
 			},
 			// Our caller is blocking on the final DATA frame, not
 			// this intermediate frame, so no need to wait.
@@ -109,8 +170,12 @@ func (wr FrameWriteRequest) Consume(n int32) (FrameWriteRequest, FrameWriteReque
 			stream: wr.stream,
 			write: &writeData{
 				streamID:  wd.streamID,
-				p:         wd.p[allowed:],
+				p:         wd.p[dataLen:],
 				endStream: wd.endStream,
+				// pad deliberately not carried over: it was sized
+				// for *this* fragment's dataLen and belongs only
+				// on it. The remaining fragment gets its own pad
+				// chosen fresh next time Consume() runs on it.
 			},
 			done: wr.done,
 		}
@@ -118,8 +183,7 @@ func (wr FrameWriteRequest) Consume(n int32) (FrameWriteRequest, FrameWriteReque
 	}
 
 	// The frame is consumed whole.
-	// NB: This cast cannot overflow because allowed is <= math.MaxInt32.
-	wr.stream.flow.take(int32(len(wd.p)))
+	wd.pad = pad
 	return wr, empty, 1
 }
 

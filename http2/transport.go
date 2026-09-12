@@ -1556,17 +1556,50 @@ func (cs *clientStream) writeRequestBody(req *http.Request) (err error) {
 
 		remain := buf[:n]
 		for len(remain) > 0 && err == nil {
-			var allowed int32
-			allowed, err = cs.awaitFlowControl(len(remain))
+			// When DataPaddingMax>0, the wire frame is len(data) + 1
+			// (pad-length field) + padLen bytes, and per RFC 7540 §6.9.1
+			// *all* of that — not just len(data) — counts against the
+			// flow-control window. Reserve room for the worst case up
+			// front so cs.flow.take() below (inside awaitFlowControl)
+			// matches what we actually put on the wire; otherwise our
+			// own bookkeeping silently drifts ahead of the peer's real
+			// accounting (which does count the padding, see
+			// serverConn.processData's sc.inflow.take(f.Length)) and,
+			// after enough padded frames, the peer sees more bytes than
+			// it ever granted and kills the connection with a
+			// FLOW_CONTROL_ERROR GOAWAY.
+			overhead := 0
+			if cc.t.DataPaddingMax > 0 {
+				overhead = 1 + cc.t.DataPaddingMax
+			}
+			var allowedTotal int32
+			allowedTotal, err = cs.awaitFlowControl(len(remain) + overhead)
 			if err != nil {
 				return err
 			}
 			cc.wmu.Lock()
-			data := remain[:allowed]
-			remain = remain[allowed:]
+			dataLen := int(allowedTotal) - overhead
+			if dataLen < 0 {
+				dataLen = 0
+			}
+			if dataLen > len(remain) {
+				dataLen = len(remain)
+			}
+			data := remain[:dataLen]
+			remain = remain[dataLen:]
 			sentEnd = sawEOF && len(remain) == 0 && !hasTrailers
 			if cc.t.DataPaddingMax > 0 {
 				padLen := pickDataPaddingLen(cc.t.DataPaddingMin, cc.t.DataPaddingMax, len(data), maxFrameSize)
+				// awaitFlowControl may have granted less than the full
+				// overhead reservation (e.g. the window was already
+				// close to empty) — never spend padding we didn't
+				// actually get charged for.
+				if room := int(allowedTotal) - dataLen - 1; padLen > room {
+					if room < 0 {
+						room = 0
+					}
+					padLen = room
+				}
 				err = cc.fr.WriteDataPadded(cs.ID, sentEnd, data, dataPadding(padLen))
 			} else {
 				err = cc.fr.WriteData(cs.ID, sentEnd, data)
