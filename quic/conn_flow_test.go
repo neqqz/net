@@ -98,45 +98,78 @@ func testConnInflowReturnOnRacingReads(t *testing.T) {
 }
 
 func TestConnInflowReturnOnClose(t *testing.T) {
-	synctest.Test(t, testConnInflowReturnOnClose)
-}
-func testConnInflowReturnOnClose(t *testing.T) {
-	tc, s := newTestConnAndRemoteStream(t, serverSide, uniStream, func(c *Config) {
-		c.MaxConnReadBufferSize = 64
-	})
-	tc.ignoreFrame(frameTypeStopSending)
-	tc.writeFrames(packetType1RTT, debugFrameStream{
-		id:   s.id,
-		data: make([]byte, 64),
-	})
-	s.CloseRead()
-	tc.wantFrame("closing stream updates connection-level flow control",
-		packetType1RTT, debugFrameMaxData{
-			max: 128,
+	for _, read := range []bool{true, false} {
+		name := "with partial read"
+		if !read {
+			name = "without partial read"
+		}
+		synctestSubtest(t, name, func(t *testing.T) {
+			tc, s := newTestConnAndRemoteStream(t, serverSide, uniStream, func(c *Config) {
+				c.MaxConnReadBufferSize = 64
+			})
+			tc.ignoreFrame(frameTypeStopSending)
+			tc.writeFrames(packetType1RTT, debugFrameStream{
+				id:   s.id,
+				data: make([]byte, 32),
+			})
+			if read {
+				if _, err := s.Read(make([]byte, 16)); err != nil {
+					t.Fatalf("s.Read() = %v", err)
+				}
+				tc.wantFrame("reading stream updates connection-level flow control",
+					packetType1RTT, debugFrameMaxData{
+						max: 64 + 32, // 16 read + 16 inbuf = 32 credited.
+					})
+			}
+			tc.writeFrames(packetType1RTT, debugFrameStream{
+				id:   s.id,
+				off:  32,
+				data: make([]byte, 32),
+			})
+			s.CloseRead()
+			tc.wantFrame("closing stream updates connection-level flow control",
+				packetType1RTT, debugFrameMaxData{
+					max: 128,
+				})
 		})
+	}
 }
 
 func TestConnInflowReturnOnReset(t *testing.T) {
-	synctest.Test(t, testConnInflowReturnOnReset)
-}
-func testConnInflowReturnOnReset(t *testing.T) {
-	tc, s := newTestConnAndRemoteStream(t, serverSide, uniStream, func(c *Config) {
-		c.MaxConnReadBufferSize = 64
-	})
-	tc.ignoreFrame(frameTypeStopSending)
-	tc.writeFrames(packetType1RTT, debugFrameStream{
-		id:   s.id,
-		data: make([]byte, 32),
-	})
-	tc.writeFrames(packetType1RTT, debugFrameResetStream{
-		id:        s.id,
-		finalSize: 64,
-	})
-	s.CloseRead()
-	tc.wantFrame("receiving stream reseet updates connection-level flow control",
-		packetType1RTT, debugFrameMaxData{
-			max: 128,
+	for _, read := range []bool{true, false} {
+		name := "with partial read"
+		if !read {
+			name = "without partial read"
+		}
+		synctestSubtest(t, name, func(t *testing.T) {
+			tc, s := newTestConnAndRemoteStream(t, serverSide, uniStream, func(c *Config) {
+				c.MaxConnReadBufferSize = 64
+			})
+			tc.ignoreFrame(frameTypeStopSending)
+			tc.writeFrames(packetType1RTT, debugFrameStream{
+				id:   s.id,
+				data: make([]byte, 32),
+			})
+			if read {
+				if _, err := s.Read(make([]byte, 16)); err != nil {
+					t.Fatalf("s.Read() = %v", err)
+				}
+				tc.wantFrame("reading stream updates connection-level flow control",
+					packetType1RTT, debugFrameMaxData{
+						max: 64 + 32, // 16 read + 16 inbuf = 32 credited.
+					})
+			}
+			tc.writeFrames(packetType1RTT, debugFrameResetStream{
+				id:        s.id,
+				finalSize: 64,
+			})
+			s.CloseRead()
+			tc.wantFrame("receiving stream reset updates connection-level flow control",
+				packetType1RTT, debugFrameMaxData{
+					max: 128,
+				})
 		})
+	}
 }
 
 func TestConnInflowStreamViolation(t *testing.T) {

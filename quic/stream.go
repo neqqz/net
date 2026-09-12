@@ -604,7 +604,11 @@ func (s *Stream) StopSending(code uint64) error {
 		s.inclosedcode = code
 		s.inclosed.set()
 	}
-	discarded := s.in.end - s.in.start
+	s.inbufmu.Lock()
+	discarded := max(0, s.in.end-s.in.start-int64(len(s.inbuf)))
+	s.inbuf = nil
+	s.inbufoff = 0
+	s.inbufmu.Unlock()
 	s.in.discardBefore(s.in.end)
 	s.inUnlock()
 	s.conn.handleStreamBytesReadOffLoop(discarded) // must be done with ingate unlocked
@@ -869,7 +873,12 @@ func (s *Stream) handleReset(code uint64, finalSize int64) error {
 			return err
 		}
 	}
-	s.conn.handleStreamBytesReadOnLoop(finalSize - s.in.start)
+	s.inbufmu.Lock()
+	unread := max(0, finalSize-s.in.start-int64(len(s.inbuf)))
+	s.inbuf = nil
+	s.inbufoff = 0
+	s.inbufmu.Unlock()
+	s.conn.handleStreamBytesReadOnLoop(unread)
 	s.in.discardBefore(s.in.end)
 	s.inresetcode = int64(code)
 	s.insize = finalSize

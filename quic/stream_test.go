@@ -971,21 +971,31 @@ func testStreamReadFromClosedStream(t *testing.T) {
 }
 
 func TestStreamCloseReadWithAllDataReceived(t *testing.T) {
-	synctest.Test(t, testStreamCloseReadWithAllDataReceived)
-}
-func testStreamCloseReadWithAllDataReceived(t *testing.T) {
-	tc, s := newTestConnAndRemoteStream(t, serverSide, bidiStream, permissiveTransportParameters)
-	tc.writeFrames(packetType1RTT, debugFrameStream{
-		id:   s.id,
-		data: []byte{1, 2, 3},
-		fin:  true,
-	})
-	s.CloseRead()
-	tc.wantIdle("CloseRead in Data Recvd state doesn't need to send STOP_SENDING")
-	// We had all the data for the stream, but CloseRead discarded it.
-	wantErr := "read from closed stream"
-	if n, err := s.Read(make([]byte, 16)); err == nil || !strings.Contains(err.Error(), wantErr) {
-		t.Errorf("s.Read() = %v, %v; want error %q", n, err, wantErr)
+	for _, read := range []bool{true, false} {
+		name := "with partial read"
+		if !read {
+			name = "without partial read"
+		}
+		synctestSubtest(t, name, func(t *testing.T) {
+			tc, s := newTestConnAndRemoteStream(t, serverSide, bidiStream, permissiveTransportParameters)
+			tc.writeFrames(packetType1RTT, debugFrameStream{
+				id:   s.id,
+				data: []byte{1, 2, 3},
+				fin:  true,
+			})
+			if read {
+				if _, err := s.Read(make([]byte, 1)); err != nil {
+					t.Fatalf("s.Read() = %v", err)
+				}
+			}
+			s.CloseRead()
+			tc.wantIdle("CloseRead in Data Recvd state doesn't need to send STOP_SENDING")
+			// We had all the data for the stream, but CloseRead discarded it.
+			wantErr := "read from closed stream"
+			if n, err := s.Read(make([]byte, 16)); err == nil || !strings.Contains(err.Error(), wantErr) {
+				t.Errorf("s.Read() = %v, %v; want error %q", n, err, wantErr)
+			}
+		})
 	}
 }
 
@@ -1299,8 +1309,8 @@ func TestStreamPeerResetsWithUnreadAndUnsentData(t *testing.T) {
 			code:      sentCode,
 		})
 		wantErr := StreamError(sentCode)
-		if _, err := io.ReadAll(s); !errors.Is(err, wantErr) {
-			t.Fatalf("Read reset stream: ReadAll got error %v; want %v", err, wantErr)
+		if unread, err := io.ReadAll(s); !errors.Is(err, wantErr) || len(unread) != 0 {
+			t.Fatalf("Read reset stream: ReadAll got %x, error %v; want empty, %v", unread, err, wantErr)
 		}
 	})
 }
