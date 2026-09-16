@@ -59,8 +59,8 @@ func newDatagramForReset(cid []byte, size int, addr netip.AddrPort) *datagram {
 		dgram = append(dgram, byte(len(dgram))) // semi-random junk
 	}
 	return &datagram{
-		b:        dgram,
-		peerAddr: addr,
+		b:    dgram,
+		path: pathAddrs{peer: addr},
 	}
 }
 
@@ -255,7 +255,8 @@ func TestStatelessResetSuccessfulPrefix(t *testing.T) {
 			}
 			dgram = append(dgram, resetToken[:]...)
 			tc.endpoint.write(&datagram{
-				b: dgram,
+				b:    dgram,
+				path: tc.path,
 			})
 			if err := tc.conn.Wait(canceledContext()); !errors.Is(err, errStatelessReset) {
 				t.Errorf("conn.Wait() = %v, want errStatelessReset", err)

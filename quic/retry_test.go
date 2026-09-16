@@ -53,6 +53,7 @@ func newRetryServerTest(t *testing.T) *retryServerTest {
 				},
 			},
 		}},
+		path:       defaultEndpointPath,
 		paddedSize: 1200,
 	})
 	got := te.readDatagram()
@@ -98,6 +99,7 @@ func testRetryServerSucceeds(t *testing.T) {
 				},
 			},
 		}},
+		path:       defaultEndpointPath,
 		paddedSize: 1200,
 	})
 	tc := te.accept()
@@ -144,12 +146,14 @@ func testRetryServerTokenInvalid(t *testing.T) {
 				},
 			},
 		}},
+		path:       defaultEndpointPath,
 		paddedSize: 1200,
 	})
 	te.wantDatagram("server closes connection after Initial with invalid Retry token",
 		initialConnectionCloseDatagram(
 			rt.retry.srcConnID,
 			rt.originalSrcConnID,
+			defaultEndpointPath,
 			errInvalidToken))
 }
 
@@ -176,12 +180,14 @@ func testRetryServerTokenTooOld(t *testing.T) {
 				},
 			},
 		}},
+		path:       defaultEndpointPath,
 		paddedSize: 1200,
 	})
 	te.wantDatagram("server closes connection after Initial with expired token",
 		initialConnectionCloseDatagram(
 			rt.retry.srcConnID,
 			rt.originalSrcConnID,
+			defaultEndpointPath,
 			errInvalidToken))
 }
 
@@ -194,6 +200,10 @@ func testRetryServerTokenWrongIP(t *testing.T) {
 	// https://www.rfc-editor.org/rfc/rfc9000#section-8.1.4-3
 	rt := newRetryServerTest(t)
 	te := rt.te
+	path := pathAddrs{
+		local: te.localAddr,
+		peer:  netip.MustParseAddrPort("10.0.0.2:8000"),
+	}
 	te.writeDatagram(&testDatagram{
 		packets: []*testPacket{{
 			ptype:     packetTypeInitial,
@@ -209,12 +219,13 @@ func testRetryServerTokenWrongIP(t *testing.T) {
 			},
 		}},
 		paddedSize: 1200,
-		addr:       netip.MustParseAddrPort("10.0.0.2:8000"),
+		path:       path,
 	})
 	te.wantDatagram("server closes connection after Initial from wrong address",
 		initialConnectionCloseDatagram(
 			rt.retry.srcConnID,
 			rt.originalSrcConnID,
+			path,
 			errInvalidToken))
 }
 
@@ -240,12 +251,14 @@ func testRetryServerShortDstConnID(t *testing.T) {
 				},
 			},
 		}},
+		path:       defaultEndpointPath,
 		paddedSize: 1200,
 	})
 	te.wantDatagram("server closes connection after Initial from wrong address",
 		initialConnectionCloseDatagram(
 			[]byte("short id"),
 			rt.originalSrcConnID,
+			defaultEndpointPath,
 			errInvalidToken))
 }
 
@@ -493,8 +506,8 @@ func testRetryClientIgnoresRetryWithInvalidIntegrityTag(t *testing.T) {
 	})
 	pkt[len(pkt)-1] ^= 1 // invalidate the integrity tag
 	tc.endpoint.write(&datagram{
-		b:        pkt,
-		peerAddr: testClientAddr,
+		b:    pkt,
+		path: pathAddrs{peer: testClientAddr},
 	})
 	tc.wantIdle("client ignores Retry with invalid integrity tag")
 }
@@ -612,7 +625,7 @@ func initialClientCrypto(t *testing.T, e *testEndpoint, p transportParameters) [
 	}
 }
 
-func initialConnectionCloseDatagram(srcConnID, dstConnID []byte, code transportError) *testDatagram {
+func initialConnectionCloseDatagram(srcConnID, dstConnID []byte, path pathAddrs, code transportError) *testDatagram {
 	return &testDatagram{
 		packets: []*testPacket{{
 			ptype:     packetTypeInitial,
@@ -626,5 +639,6 @@ func initialConnectionCloseDatagram(srcConnID, dstConnID []byte, code transportE
 				},
 			},
 		}},
+		path: path,
 	}
 }
