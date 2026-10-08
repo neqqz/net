@@ -399,8 +399,8 @@ func TestPriorityRSTFrames(t *testing.T) {
 	sc := &serverConn{maxFrameSize: 16}
 	st1 := &stream{id: 1, sc: sc}
 
-	ws.Push(FrameWriteRequest{&writeData{1, make([]byte, 16), false}, st1, nil})
-	ws.Push(FrameWriteRequest{&writeData{1, make([]byte, 16), false}, st1, nil})
+	ws.Push(FrameWriteRequest{&writeData{1, make([]byte, 16), false, nil}, st1, nil})
+	ws.Push(FrameWriteRequest{&writeData{1, make([]byte, 16), false, nil}, st1, nil})
 	ws.Push(makeWriteRSTStream(1))
 	// No flow-control bytes available.
 	wr, ok := ws.Pop()
@@ -441,8 +441,8 @@ func TestPriorityFlowControl(t *testing.T) {
 	st1 := &stream{id: 1, sc: sc}
 	st2 := &stream{id: 2, sc: sc}
 
-	ws.Push(FrameWriteRequest{&writeData{1, make([]byte, 16), false}, st1, nil})
-	ws.Push(FrameWriteRequest{&writeData{2, make([]byte, 16), false}, st2, nil})
+	ws.Push(FrameWriteRequest{&writeData{1, make([]byte, 16), false, nil}, st1, nil})
+	ws.Push(FrameWriteRequest{&writeData{2, make([]byte, 16), false, nil}, st2, nil})
 	ws.AdjustStream(2, PriorityParam{StreamDep: 1})
 
 	// No flow-control bytes available.
@@ -474,7 +474,7 @@ func TestPriorityThrottleOutOfOrderWrites(t *testing.T) {
 	st2 := &stream{id: 2, sc: sc}
 	st1.flow.add(4096)
 	st2.flow.add(4096)
-	ws.Push(FrameWriteRequest{&writeData{2, make([]byte, 4096), false}, st2, nil})
+	ws.Push(FrameWriteRequest{&writeData{2, make([]byte, 4096), false, nil}, st2, nil})
 	ws.AdjustStream(2, PriorityParam{StreamDep: 1})
 
 	// We have enough flow-control bytes to write st2 in a single Pop call.
@@ -492,7 +492,7 @@ func TestPriorityThrottleOutOfOrderWrites(t *testing.T) {
 	}
 
 	// Now add data on st1. This should take precedence.
-	ws.Push(FrameWriteRequest{&writeData{1, make([]byte, 4096), false}, st1, nil})
+	ws.Push(FrameWriteRequest{&writeData{1, make([]byte, 4096), false, nil}, st1, nil})
 	wr, ok = ws.Pop()
 	if !ok {
 		t.Fatalf("Pop(st1)=false, want true")
@@ -528,8 +528,8 @@ func TestPriorityWeights(t *testing.T) {
 	st1.flow.add(40)
 	st2.flow.add(40)
 
-	ws.Push(FrameWriteRequest{&writeData{1, make([]byte, 40), false}, st1, nil})
-	ws.Push(FrameWriteRequest{&writeData{2, make([]byte, 40), false}, st2, nil})
+	ws.Push(FrameWriteRequest{&writeData{1, make([]byte, 40), false, nil}, st1, nil})
+	ws.Push(FrameWriteRequest{&writeData{2, make([]byte, 40), false, nil}, st2, nil})
 	ws.AdjustStream(1, PriorityParam{StreamDep: 0, Weight: 34})
 	ws.AdjustStream(2, PriorityParam{StreamDep: 0, Weight: 9})
 
@@ -573,8 +573,8 @@ func TestPriorityWeightsMinMax(t *testing.T) {
 	//   st1, total bytes so far is (st1=24, st=40)
 	//   st1, total bytes so far is (st1=32, st=40)
 	//   st1, total bytes so far is (st1=40, st=40)
-	ws.Push(FrameWriteRequest{&writeData{1, make([]byte, 40), false}, st1, nil})
-	ws.Push(FrameWriteRequest{&writeData{2, make([]byte, 40), false}, st2, nil})
+	ws.Push(FrameWriteRequest{&writeData{1, make([]byte, 40), false, nil}, st1, nil})
+	ws.Push(FrameWriteRequest{&writeData{2, make([]byte, 40), false, nil}, st2, nil})
 	ws.AdjustStream(1, PriorityParam{StreamDep: 0, Weight: 0})
 	ws.AdjustStream(2, PriorityParam{StreamDep: 0, Weight: 255})
 

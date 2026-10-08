@@ -79,7 +79,7 @@ func TestFrameWriteRequestWithData(t *testing.T) {
 		sc: &serverConn{maxFrameSize: 16},
 	}
 	const size = 32
-	wr := FrameWriteRequest{&writeData{st.id, make([]byte, size), true}, st, make(chan error)}
+	wr := FrameWriteRequest{&writeData{st.id, make([]byte, size), true, nil}, st, make(chan error)}
 	if got, want := wr.DataSize(), size; got != want {
 		t.Errorf("DataSize: got %v, want %v", got, want)
 	}
@@ -116,7 +116,7 @@ func TestFrameWriteRequestData(t *testing.T) {
 		sc: &serverConn{maxFrameSize: 16},
 	}
 	const size = 32
-	wr := FrameWriteRequest{&writeData{st.id, make([]byte, size), true}, st, make(chan error)}
+	wr := FrameWriteRequest{&writeData{st.id, make([]byte, size), true, nil}, st, make(chan error)}
 	if got, want := wr.DataSize(), size; got != want {
 		t.Errorf("DataSize: got %v, want %v", got, want)
 	}
@@ -131,12 +131,12 @@ func TestFrameWriteRequestData(t *testing.T) {
 	st.flow.add(size)
 	want := []FrameWriteRequest{
 		{
-			write:  &writeData{st.id, make([]byte, st.sc.maxFrameSize), false},
+			write:  &writeData{st.id, make([]byte, st.sc.maxFrameSize), false, nil},
 			stream: st,
 			done:   nil,
 		},
 		{
-			write:  &writeData{st.id, make([]byte, size-st.sc.maxFrameSize), true},
+			write:  &writeData{st.id, make([]byte, size-st.sc.maxFrameSize), true, nil},
 			stream: st,
 			done:   wr.done,
 		},
@@ -149,12 +149,12 @@ func TestFrameWriteRequestData(t *testing.T) {
 	// Consume 8 bytes from the remaining frame.
 	want = []FrameWriteRequest{
 		{
-			write:  &writeData{st.id, make([]byte, 8), false},
+			write:  &writeData{st.id, make([]byte, 8), false, nil},
 			stream: st,
 			done:   nil,
 		},
 		{
-			write:  &writeData{st.id, make([]byte, size-st.sc.maxFrameSize-8), true},
+			write:  &writeData{st.id, make([]byte, size-st.sc.maxFrameSize-8), true, nil},
 			stream: st,
 			done:   wr.done,
 		},
@@ -167,7 +167,7 @@ func TestFrameWriteRequestData(t *testing.T) {
 	// Consume all remaining bytes.
 	want = []FrameWriteRequest{
 		{
-			write:  &writeData{st.id, make([]byte, size-st.sc.maxFrameSize-8), true},
+			write:  &writeData{st.id, make([]byte, size-st.sc.maxFrameSize-8), true, nil},
 			stream: st,
 			done:   wr.done,
 		},

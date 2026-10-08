@@ -110,7 +110,10 @@ func (wr FrameWriteRequest) Consume(n int32) (FrameWriteRequest, FrameWriteReque
 	//     carry wd.pad on only one fragment and silently send the rest
 	//     unpadded — recomputing per fragment keeps every wire frame of a
 	//     large write padded, not just the first.
-	dataPaddingMax := wr.stream.sc.srv.DataPaddingMax
+	dataPaddingMax, dataPaddingMin := 0, 0
+	if srv := wr.stream.sc.srv; srv != nil { // nil only in unit tests
+		dataPaddingMax, dataPaddingMin = srv.DataPaddingMax, srv.DataPaddingMin
+	}
 	// Reserve room for the worst case (pad-length byte + max padding) up
 	// front, the same way the client side does in writeRequestBody, so
 	// shrinking dataLen to fit "allowed" actually leaves space for
@@ -121,19 +124,29 @@ func (wr FrameWriteRequest) Consume(n int32) (FrameWriteRequest, FrameWriteReque
 		overhead = 1 + dataPaddingMax
 	}
 	dataLen := len(wd.p)
-	if dataLen+overhead > int(allowed) {
-		dataLen = int(allowed) - overhead
-		if dataLen < 0 {
-			dataLen = 0
+	usePad := dataPaddingMax > 0
+	if usePad && dataLen+overhead > int(allowed) {
+		if int(allowed) > overhead {
+			dataLen = int(allowed) - overhead
+		} else {
+			// Not even one data byte fits next to the worst-case padding
+			// reservation. Sending a padding-only frame here would burn
+			// window without making progress (and, with a 1-byte window,
+			// spin forever emitting empty DATA frames), so send plain
+			// unpadded data instead.
+			usePad = false
 		}
 	}
+	if !usePad && dataLen > int(allowed) {
+		dataLen = int(allowed)
+	}
 	var pad []byte
-	if dataPaddingMax > 0 {
+	if usePad {
 		room := int(allowed) - dataLen - 1
 		if room < 0 {
 			room = 0
 		}
-		padLen := pickDataPaddingLen(wr.stream.sc.srv.DataPaddingMin, dataPaddingMax, dataLen, dataLen+1+room)
+		padLen := pickDataPaddingLen(dataPaddingMin, dataPaddingMax, dataLen, dataLen+1+room)
 		if padLen > room {
 			padLen = room
 		}
