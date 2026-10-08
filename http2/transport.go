@@ -526,22 +526,46 @@ func (t *Transport) newClientConn(c net.Conn, singleUse bool, internalStateHook 
 		cc.tlsState = &state
 	}
 
-	initialSettings := []Setting{
-		{ID: SettingEnablePush, Val: 0},
-		{ID: SettingInitialWindowSize, Val: uint32(cc.initialStreamRecvWindowSize)},
-	}
-	initialSettings = append(initialSettings, Setting{ID: SettingMaxFrameSize, Val: conf.MaxReadFrameSize})
-	if max := t.maxHeaderListSize(); max != 0 {
-		initialSettings = append(initialSettings, Setting{ID: SettingMaxHeaderListSize, Val: max})
-	}
-	if maxHeaderTableSize != initialHeaderTableSize {
-		initialSettings = append(initialSettings, Setting{ID: SettingHeaderTableSize, Val: maxHeaderTableSize})
+	connWindowUpdate := conf.MaxUploadBufferPerConnection
+	var initialSettings []Setting
+	if t.ChromeFingerprint {
+		// Chrome's preamble (Akamai fingerprint 1:65536;2:0;4:6291456;6:262144|15663105).
+		// The advertised values must match what we actually accept, so
+		// flow-control state is derived from the same constants.
+		const (
+			chromeHeaderTableSize    = 65536
+			chromeStreamWindow       = 6291456
+			chromeMaxHeaderListSize  = 262144
+			chromeConnWindowIncrease = 15663105
+		)
+		cc.initialStreamRecvWindowSize = chromeStreamWindow
+		connWindowUpdate = chromeConnWindowIncrease
+		initialSettings = []Setting{
+			{ID: SettingHeaderTableSize, Val: chromeHeaderTableSize},
+			{ID: SettingEnablePush, Val: 0},
+			{ID: SettingInitialWindowSize, Val: chromeStreamWindow},
+			{ID: SettingMaxHeaderListSize, Val: chromeMaxHeaderListSize},
+		}
+		cc.fr.ReadMetaHeaders = hpack.NewDecoder(chromeHeaderTableSize, nil)
+		cc.fr.MaxHeaderListSize = chromeMaxHeaderListSize
+	} else {
+		initialSettings = []Setting{
+			{ID: SettingEnablePush, Val: 0},
+			{ID: SettingInitialWindowSize, Val: uint32(cc.initialStreamRecvWindowSize)},
+		}
+		initialSettings = append(initialSettings, Setting{ID: SettingMaxFrameSize, Val: conf.MaxReadFrameSize})
+		if max := t.maxHeaderListSize(); max != 0 {
+			initialSettings = append(initialSettings, Setting{ID: SettingMaxHeaderListSize, Val: max})
+		}
+		if maxHeaderTableSize != initialHeaderTableSize {
+			initialSettings = append(initialSettings, Setting{ID: SettingHeaderTableSize, Val: maxHeaderTableSize})
+		}
 	}
 
 	cc.bw.Write(clientPreface)
 	cc.fr.WriteSettings(initialSettings...)
-	cc.fr.WriteWindowUpdate(0, uint32(conf.MaxUploadBufferPerConnection))
-	cc.inflow.init(conf.MaxUploadBufferPerConnection + initialWindowSize)
+	cc.fr.WriteWindowUpdate(0, uint32(connWindowUpdate))
+	cc.inflow.init(connWindowUpdate + initialWindowSize)
 	cc.bw.Flush()
 	if cc.werr != nil {
 		cc.Close()
@@ -1241,7 +1265,7 @@ func (cs *clientStream) encodeAndWriteHeaders(req *http.Request) error {
 	// sent by writeRequestBody below, along with any Trailers,
 	// again in form HEADERS{1}, CONTINUATION{0,})
 	cc.hbuf.Reset()
-	res, err := encodeRequestHeaders(req, cs.requestedGzip, cc.peerMaxHeaderListSize, func(name, value string) {
+	res, err := encodeRequestHeaders(req, cs.requestedGzip, cc.peerMaxHeaderListSize, cc.t.ChromeFingerprint, func(name, value string) {
 		cc.writeHeader(name, value)
 	})
 	if err != nil {
@@ -1257,7 +1281,7 @@ func (cs *clientStream) encodeAndWriteHeaders(req *http.Request) error {
 	return err
 }
 
-func encodeRequestHeaders(req *http.Request, addGzipHeader bool, peerMaxHeaderListSize uint64, headerf func(name, value string)) (httpcommon.EncodeHeadersResult, error) {
+func encodeRequestHeaders(req *http.Request, addGzipHeader bool, peerMaxHeaderListSize uint64, chromeOrder bool, headerf func(name, value string)) (httpcommon.EncodeHeadersResult, error) {
 	return httpcommon.EncodeHeaders(req.Context(), httpcommon.EncodeHeadersParam{
 		Request: httpcommon.Request{
 			Header:              req.Header,
@@ -1267,9 +1291,10 @@ func encodeRequestHeaders(req *http.Request, addGzipHeader bool, peerMaxHeaderLi
 			Method:              req.Method,
 			ActualContentLength: actualContentLength(req),
 		},
-		AddGzipHeader:         addGzipHeader,
-		PeerMaxHeaderListSize: peerMaxHeaderListSize,
-		DefaultUserAgent:      defaultUserAgent,
+		AddGzipHeader:           addGzipHeader,
+		PeerMaxHeaderListSize:   peerMaxHeaderListSize,
+		DefaultUserAgent:        defaultUserAgent,
+		ChromePseudoHeaderOrder: chromeOrder,
 	}, headerf)
 }
 

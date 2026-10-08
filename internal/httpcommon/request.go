@@ -49,6 +49,11 @@ type EncodeHeadersParam struct {
 	// DefaultUserAgent is the User-Agent header to send when the request
 	// neither contains a User-Agent nor disables it.
 	DefaultUserAgent string
+
+	// ChromePseudoHeaderOrder emits pseudo-headers as :method, :authority,
+	// :scheme, :path (Chrome's order) instead of :authority, :method,
+	// :path, :scheme.
+	ChromePseudoHeaderOrder bool
 }
 
 // EncodeHeadersResult is the result of EncodeHeaders.
@@ -135,15 +140,24 @@ func EncodeHeaders(ctx context.Context, param EncodeHeadersParam, headerf func(n
 		// target URI (the path-absolute production and optionally a '?' character
 		// followed by the query production, see Sections 3.3 and 3.4 of
 		// [RFC3986]).
-		f(":authority", host)
 		m := req.Method
 		if m == "" {
 			m = "GET"
 		}
-		f(":method", m)
-		if !isNormalConnect {
-			f(":path", path)
-			f(":scheme", req.URL.Scheme)
+		if param.ChromePseudoHeaderOrder {
+			f(":method", m)
+			f(":authority", host)
+			if !isNormalConnect {
+				f(":scheme", req.URL.Scheme)
+				f(":path", path)
+			}
+		} else {
+			f(":authority", host)
+			f(":method", m)
+			if !isNormalConnect {
+				f(":path", path)
+				f(":scheme", req.URL.Scheme)
+			}
 		}
 		if protocol != "" {
 			f(":protocol", protocol)

@@ -234,5 +234,5 @@ func NewNoDialClientConnPool() ClientConnPool {
 }
 
 func EncodeRequestHeaders(req *http.Request, addGzipHeader bool, peerMaxHeaderListSize uint64, headerf func(name, value string)) (httpcommon.EncodeHeadersResult, error) {
-	return encodeRequestHeaders(req, addGzipHeader, peerMaxHeaderListSize, headerf)
+	return encodeRequestHeaders(req, addGzipHeader, peerMaxHeaderListSize, false, headerf)
 }

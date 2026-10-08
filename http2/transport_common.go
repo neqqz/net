@@ -210,6 +210,16 @@ type Transport struct {
 	DataPaddingMin int
 	DataPaddingMax int
 
+	// ChromeFingerprint makes the connection preamble look like Chrome's:
+	// SETTINGS {HEADER_TABLE_SIZE=65536, ENABLE_PUSH=0,
+	// INITIAL_WINDOW_SIZE=6291456, MAX_HEADER_LIST_SIZE=262144} in that
+	// order, a connection WINDOW_UPDATE of 15663105, and request
+	// pseudo-headers in :method, :authority, :scheme, :path order. Go's
+	// defaults differ in all three, which is trivially detectable (Akamai
+	// HTTP/2 fingerprint) when the TLS layer claims to be Chrome. Only
+	// honored by the legacy (non-wrapped) Transport.
+	ChromeFingerprint bool
+
 	// Internal state, differs between wrapped and non-wrapped implementations.
 	transportInternal
 }
