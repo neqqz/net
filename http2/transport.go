@@ -1609,21 +1609,20 @@ func (cs *clientStream) writeRequestBody(req *http.Request) (err error) {
 
 		remain := buf[:n]
 		for len(remain) > 0 && err == nil {
-			// When DataPaddingMax>0, the wire frame is len(data) + 1
-			// (pad-length field) + padLen bytes, and per RFC 7540 §6.9.1
-			// *all* of that — not just len(data) — counts against the
-			// flow-control window. Reserve room for the worst case up
-			// front so cs.flow.take() below (inside awaitFlowControl)
-			// matches what we actually put on the wire; otherwise our
-			// own bookkeeping silently drifts ahead of the peer's real
-			// accounting (which does count the padding, see
-			// serverConn.processData's sc.inflow.take(f.Length)) and,
-			// after enough padded frames, the peer sees more bytes than
-			// it ever granted and kills the connection with a
-			// FLOW_CONTROL_ERROR GOAWAY.
-			overhead := 0
+			// Pick the padding first and reserve exactly 1+padLen next to the
+			// data. The pad-length byte and the padding count against flow
+			// control like the data does (RFC 7540 §6.9.1), and
+			// awaitFlowControl charges whatever it returns. Reserving the
+			// worst case and sending less would leak the difference from the
+			// stream window for good (the peer only returns what it received),
+			// stalling long uploads.
+			padLen := 0
 			if cc.t.DataPaddingMax > 0 {
-				overhead = 1 + cc.t.DataPaddingMax
+				padLen = pickDataPaddingLen(cc.t.DataPaddingMin, cc.t.DataPaddingMax, 0, maxFrameSize)
+			}
+			overhead := 0
+			if padLen > 0 {
+				overhead = 1 + padLen
 			}
 			var allowedTotal int32
 			allowedTotal, err = cs.awaitFlowControl(len(remain) + overhead)
@@ -1631,28 +1630,20 @@ func (cs *clientStream) writeRequestBody(req *http.Request) (err error) {
 				return err
 			}
 			cc.wmu.Lock()
-			dataLen := int(allowedTotal) - overhead
-			if dataLen < 0 {
-				dataLen = 0
-			}
-			if dataLen > len(remain) {
-				dataLen = len(remain)
+			dataLen := int(allowedTotal)
+			if overhead > 0 {
+				if dataLen > overhead {
+					dataLen -= overhead
+				} else {
+					// Window too small to fit padding next to any data:
+					// send plain data, charged exactly dataLen.
+					padLen = 0
+				}
 			}
 			data := remain[:dataLen]
 			remain = remain[dataLen:]
 			sentEnd = sawEOF && len(remain) == 0 && !hasTrailers
-			if cc.t.DataPaddingMax > 0 {
-				padLen := pickDataPaddingLen(cc.t.DataPaddingMin, cc.t.DataPaddingMax, len(data), maxFrameSize)
-				// awaitFlowControl may have granted less than the full
-				// overhead reservation (e.g. the window was already
-				// close to empty) — never spend padding we didn't
-				// actually get charged for.
-				if room := int(allowedTotal) - dataLen - 1; padLen > room {
-					if room < 0 {
-						room = 0
-					}
-					padLen = room
-				}
+			if padLen > 0 {
 				err = cc.fr.WriteDataPadded(cs.ID, sentEnd, data, dataPadding(padLen))
 			} else {
 				err = cc.fr.WriteData(cs.ID, sentEnd, data)
