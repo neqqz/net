@@ -1629,7 +1629,6 @@ func (cs *clientStream) writeRequestBody(req *http.Request) (err error) {
 			if err != nil {
 				return err
 			}
-			cc.wmu.Lock()
 			dataLen := int(allowedTotal)
 			if overhead > 0 {
 				if dataLen > overhead {
@@ -1640,6 +1639,20 @@ func (cs *clientStream) writeRequestBody(req *http.Request) (err error) {
 					padLen = 0
 				}
 			}
+			if dataLen > len(remain) {
+				dataLen = len(remain)
+			}
+			actualCharged := dataLen
+			if padLen > 0 {
+				actualCharged += 1 + padLen
+			}
+			if refund := int(allowedTotal) - actualCharged; refund > 0 {
+				cc.mu.Lock()
+				cs.flow.add(int32(refund))
+				cc.cond.Broadcast()
+				cc.mu.Unlock()
+			}
+			cc.wmu.Lock()
 			data := remain[:dataLen]
 			remain = remain[dataLen:]
 			sentEnd = sawEOF && len(remain) == 0 && !hasTrailers
