@@ -1192,7 +1192,7 @@ func (sc *serverConn) startFrameWrite(wr FrameWriteRequest) {
 		// Encode the frame in the serve goroutine, to ensure we don't have
 		// any lingering asynchronous references to data passed to Write.
 		// See https://go.dev/issue/58446.
-		sc.framer.startWriteDataPadded(wd.streamID, wd.endStream, wd.p, wd.pad)
+		sc.framer.startWriteDataPadded(wd.streamID, wd.endStream, wd.p, nil)
 		sc.writingFrameAsync = true
 		go sc.writeFrameAsync(wr, wd)
 	} else {
