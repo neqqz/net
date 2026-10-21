@@ -171,18 +171,6 @@ type Server struct {
 	// [http.HTTP2Config.CountError] instead.
 	CountError func(errType string)
 
-	// DataPaddingMin/DataPaddingMax add random PADDED-flag padding (RFC 7540
-	// §6.1) to outgoing response-body DATA frames, chosen uniformly in
-	// [DataPaddingMin, DataPaddingMax] bytes per frame. The HTTP/2 pad-length
-	// field is one byte, so DataPaddingMax above 255 is clamped to 255.
-	// Padding never pushes a frame above the peer's MAX_FRAME_SIZE. Zero/zero
-	// (the default) disables padding. Only honored by the legacy
-	// (non-wrapped) Server — see server.go; when net/http's own HTTP/2
-	// server is in use (Go 1.27+ without the http2legacy build tag) this
-	// has no effect, since frame writing happens inside the standard library.
-	DataPaddingMin int
-	DataPaddingMax int
-
 	// Internal state. This is a pointer (rather than embedded directly)
 	// so that we don't embed a Mutex in this struct, which will make the
 	// struct non-copyable, which might break some callers.

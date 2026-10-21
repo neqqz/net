@@ -1609,58 +1609,16 @@ func (cs *clientStream) writeRequestBody(req *http.Request) (err error) {
 
 		remain := buf[:n]
 		for len(remain) > 0 && err == nil {
-			// Pick the padding first and reserve exactly 1+padLen next to the
-			// data. The pad-length byte and the padding count against flow
-			// control like the data does (RFC 7540 §6.9.1), and
-			// awaitFlowControl charges whatever it returns. Reserving the
-			// worst case and sending less would leak the difference from the
-			// stream window for good (the peer only returns what it received),
-			// stalling long uploads.
-			padLen := 0
-			if cc.t.DataPaddingMax > 0 {
-				padLen = pickDataPaddingLen(cc.t.DataPaddingMin, cc.t.DataPaddingMax, 0, maxFrameSize)
-			}
-			overhead := 0
-			if padLen > 0 {
-				overhead = 1 + padLen
-			}
-			var allowedTotal int32
-			allowedTotal, err = cs.awaitFlowControl(len(remain) + overhead)
+			var allowed int32
+			allowed, err = cs.awaitFlowControl(len(remain))
 			if err != nil {
 				return err
 			}
-			dataLen := int(allowedTotal)
-			if overhead > 0 {
-				if dataLen > overhead {
-					dataLen -= overhead
-				} else {
-					// Window too small to fit padding next to any data:
-					// send plain data, charged exactly dataLen.
-					padLen = 0
-				}
-			}
-			if dataLen > len(remain) {
-				dataLen = len(remain)
-			}
-			actualCharged := dataLen
-			if padLen > 0 {
-				actualCharged += 1 + padLen
-			}
-			if refund := int(allowedTotal) - actualCharged; refund > 0 {
-				cc.mu.Lock()
-				cs.flow.add(int32(refund))
-				cc.cond.Broadcast()
-				cc.mu.Unlock()
-			}
 			cc.wmu.Lock()
-			data := remain[:dataLen]
-			remain = remain[dataLen:]
+			data := remain[:allowed]
+			remain = remain[allowed:]
 			sentEnd = sawEOF && len(remain) == 0 && !hasTrailers
-			if padLen > 0 {
-				err = cc.fr.WriteDataPadded(cs.ID, sentEnd, data, dataPadding(padLen))
-			} else {
-				err = cc.fr.WriteData(cs.ID, sentEnd, data)
-			}
+			err = cc.fr.WriteData(cs.ID, sentEnd, data)
 			if err == nil {
 				// TODO(bradfitz): this flush is for latency, not bandwidth.
 				// Most requests won't need this. Make this opt-in or
